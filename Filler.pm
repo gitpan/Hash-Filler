@@ -2,7 +2,7 @@ package Hash::Filler;
 
 use strict;
 use Carp;
-use vars qw($VERSION $DEBUG);
+use vars qw($VERSION $DEBUG $indent);
 use Time::HiRes qw(gettimeofday tv_interval);
 
 # How to check for the existence of an element
@@ -11,9 +11,12 @@ use constant TRUE	=> 0;	# Test if the value is true
 use constant DEFINED	=> 1;	# Use defined()
 use constant EXISTS	=> 2;	# Use exists() (default)
 
-$VERSION	= '1.20';
+use constant INDENT	=> 2;	# How much to indent printouts
+
+$VERSION	= '1.30';
 $DEBUG		= '0';
 
+my $indent = 0;
 
 # Preloaded methods go here.
 
@@ -23,6 +26,7 @@ sub new {
 
     my $self = {
 	'rules' => {},		# All the rules we know about
+	'wild' => [],		# Wildcard rules
 	'times' => [],		# Accumulated times for each rule
 	'calls' => [],		# How many times each rule has been used
 	'id' => 0,		# Current rule id
@@ -45,20 +49,24 @@ sub _sort {			# This is to be used by the sort
 sub _print_rule {
     my $self = shift;
     my $rule = shift;
-    printf("  ([%d] rule %s, used %s, pref %s)\n",  
+    printf("%s([%d] rule %s for key %s, used %s, pref %s, %s be used)\n",  
+	   ' ' x $indent,
 	   $rule->{'id'},
 	   $rule,
+	   defined $rule->{'key'} ? $rule->{'key'} : '<ANY>',
 	   $rule->{'used'}, 
-	   $rule->{'pref'});
-    printf("  [called %d times (%0.6f secs)]\n",
+	   $rule->{'pref'},
+	   $rule->{'use'} ? 'can' : 'cannot');
+    printf("%s[called %d times (%0.6f secs)]\n",
+	   ' ' x $indent,
 	   $self->{'calls'}->[$rule->{'id'}],
 	   $self->{'times'}->[$rule->{'id'}]);
     my $pre = 0;
     foreach my $pr (sort @{$rule->{'prereq'}}) {
-	printf("  +- %s\n", $pr);
+	printf("%s+- prereq %s\n", ' ' x $indent, $pr);
 	++$pre;
     }
-    print "  ** No prereq\n" unless $pre;
+    printf("%s  ** No prereq\n", ' ' x $indent) unless $pre;
 }
 
 sub dump_r_tree {
@@ -66,12 +74,19 @@ sub dump_r_tree {
     foreach my $key (keys %{$self->{'rules'}}) {
 	my $dumped = 0;
 	print "Rules for key $key:\n";
-	foreach my $rule (sort _sort @{$self->{'rules'}->{$key}}) {
+	foreach my $rule (sort(_sort @{$self->{'rules'}->{$key}})) {
 	    ++$dumped;
-	    $self->_print_rule($rule);
+	    $self->_print_rule($rule, 2);
 	}
 	print "  No rules.\n" unless $dumped;
     }
+    my $dumped = 0;
+    print "Wildcard rules:\n";
+    foreach my $rule (sort(_sort @{$self->{'wild'}})) {
+	++$dumped;
+	$self->_print_rule($rule, 2);
+    }
+    print "  No rules.\n" unless $dumped;
 }
 
 sub loop {
@@ -90,16 +105,53 @@ sub profile {
     @{$_[0]->{'times'}};
 }
 
+sub remove {
+    my $self = shift;
+    my $id = shift;
+
+    return unless $id;
+
+    foreach my $key (keys %{$self->{'rules'}}) {
+	foreach my $rule (@{$self->{'rules'}->{$key}}) {
+	    if ($rule->{'id'} == $id) {
+		$rule->{'use'} = 0;
+		return;
+	    }
+	}
+    }
+    foreach my $rule (@{$self->{'wild'}}) {
+	if ($rule->{'id'} == $id) {
+	    $rule->{'use'} = 0;
+	    return;
+	}
+    }
+}
+
 sub add {
     my $ret;
-    push @{$_[0]->{'rules'}->{$_[1]}}, {
-	'key' => $_[1],
-	'code' => $_[2],
-	'prereq' => $_[3],
-	'pref' => $_[4] ? $_[4] : 100,
-	'used' => 0,
-	'id' => $ret = ++ $_[0]->{'id'},
-    };
+
+    if (defined $_[1]) {	# Specific rule
+	push @{$_[0]->{'rules'}->{$_[1]}}, {
+	    'key' => $_[1],
+	    'code' => $_[2],
+	    'prereq' => $_[3],
+	    'pref' => $_[4] ? $_[4] : 100,
+	    'used' => 0,
+	    'use' => 1,
+	    'id' => $ret = ++ $_[0]->{'id'},
+	};
+    }
+    else {			# Wildcard rule
+	push @{$_[0]->{'wild'}}, {
+	    'key' => undef,
+	    'code' => $_[2],
+	    'prereq' => $_[3],
+	    'pref' => $_[4] ? $_[4] : 100,
+	    'used' => 0,
+	    'use' => 1,
+	    'id' => $ret = ++ $_[0]->{'id'},
+	};
+    }
     $ret;
 }
 
@@ -131,20 +183,32 @@ sub fill {
 	return 1 if $href->{$key};
     }
 
-    return 0 unless $self->{'rules'}->{$key};
+    return 0 
+	unless $self->{'rules'}->{$key} or
+	    @{$self->{'wild'}};
 
 				# Look through the available rules
 				# and try to find an execution plan
 				# to fill the requested $key
 
-  RULE:    
-    foreach my $rule (sort _sort @{$self->{'rules'}->{$key}}) {
+    my @rulelist;
 
-	next if $self->{'loop'} and
-	    $rule->{'used'};
+    if ($self->{'rules'}->{$key}) {
+	push @rulelist, sort(_sort @{$self->{'rules'}->{$key}});
+    }
+
+    push @rulelist, sort(_sort @{$self->{'wild'}});
+
+  RULE:    
+    foreach my $rule (@rulelist) {
+
+	next RULE if $self->{'loop'} and $rule->{'used'};
 
 	$rule->{'used'} ++;	# Mark this rule as being used
 				# to control infinite recursion
+
+	++ $self->{'calls'}->[$rule->{'id'}];
+	$self->_print_rule($rule) if $DEBUG;
 
 				# Insure that all prerequisites
 				# are there before attempting to
@@ -165,16 +229,18 @@ sub fill {
 		next if $href->{$key};
 	    }
 
-	    if (not $self->fill($href, $pr)) {
-		next RULE;	# A prerequisite could not be
+	    $indent += INDENT;
+	    
+	    my $filled = $self->fill($href, $pr);
+
+	    $indent -= INDENT;
+
+	    next RULE 
+		unless $filled;	# A prerequisite could not be
 				# satisfied automatically so this
 				# rule cannot be applied
-	    }
 	}
 
-	$self->_print_rule($rule) if $DEBUG;
-	
-	++ $self->{'calls'}->[$rule->{'id'}];
 	my $time = [gettimeofday];
 
 	my $ret = $rule->{'code'}->($href, $key);
@@ -210,10 +276,21 @@ HashFiller - Programatically fill elements of a hash based in prerequisites
 
   my $hf = new Hash::Filler;
 
+				# Show how a ->fill() method executes
+				# the rules
+  $Hash::Filler::DEBUG = 1;
+
+				# Add a set of rules
+
   $hf->add('key1', sub { my $hr = shift; ... }, ['key2', 'key3'], $pref);
   $hf->add('key1', sub { my $hr = shift; ... }, [], $pref);
   $hf->add('key2', sub { my $hr = shift; ... }, ['key1', 'key3'], $pref);
   $hf->add('key3', sub { my $hr = shift; ... }, ['key1', 'key2'], $pref);
+  $hf->add(undef, sub { ... }, [], $pref);
+
+				# Remove rules
+
+  $hf->remove($rule_id);
 
   $hf->loop(0);			# Don't try to avoid infinite loops
 
@@ -276,9 +353,22 @@ added. The module will attempt to use them both but the execution
 order will be undefined unless you use $pref. The default $pref is
 100.
 
+A special case occurs when $key is undefined. In this case, this rule
+is said to be a 'wildcard'. This means that the rule applies to any
+key that needs to be filled. Wildcard rules are applied after any
+matching rules (ie, after rules that apply specifically to a given
+$key). Multiple wildcard rules are selected based in the preference
+and availability of prerequisites.
+
 This function returns a 'rule identifier'. This identifier is the
 index that designates a given rule. Generally, it is only used in
 conjunction with profiling.
+
+=item C<-E<gt>remove($id)>
+
+Removes the rule whose identifier matches $id. The implementation
+actually does not remove the rule. Instead it marks the rule as
+non-usable.
 
 =item C<-E<gt>dump_r_tree>
 

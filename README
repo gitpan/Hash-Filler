@@ -7,10 +7,17 @@ SYNOPSIS
 
       my $hf = new Hash::Filler;
 
+                                    # Add a set of rules
+
       $hf->add('key1', sub { my $hr = shift; ... }, ['key2', 'key3'], $pref);
       $hf->add('key1', sub { my $hr = shift; ... }, [], $pref);
       $hf->add('key2', sub { my $hr = shift; ... }, ['key1', 'key3'], $pref);
       $hf->add('key3', sub { my $hr = shift; ... }, ['key1', 'key2'], $pref);
+      $hf->add(undef, sub { ... }, [], $pref);
+
+                                    # Remove rules
+
+      $hf->remove($rule_id);
 
       $hf->loop(0);                 # Don't try to avoid infinite loops
 
@@ -68,9 +75,21 @@ DESCRIPTION
         order will be undefined unless you use $pref. The default $pref is
         100.
 
+        A special case occurs when $key is undefined. In this case, this
+        rule is said to be a 'wildcard'. This means that the rule applies to
+        any key that needs to be filled. Wildcard rules are applied after
+        any matching rules (ie, after rules that apply specifically to a
+        given $key). Multiple wildcard rules are selected based in the
+        preference and availability of prerequisites.
+
         This function returns a 'rule identifier'. This identifier is the
         index that designates a given rule. Generally, it is only used in
         conjunction with profiling.
+
+    `->remove($id)'
+        Removes the rule whose identifier matches $id. The implementation
+        actually does not remove the rule. Instead it marks the rule as
+        non-usable.
 
     `->dump_r_tree'
         This method prints out a representation of the rule tree kept by the

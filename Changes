@@ -11,3 +11,9 @@ Revision history for Perl extension Hash::Filler.
 	- Added documentation about what this module is for :)
 	- ->dump_r_tree is now 'public'
 	- Added user-supplied hash methods.
+
+1.30  Mon Sep  4 14:11:00 2000
+	- Added wildcard rules
+	- ->dump_r_tree changed the format of its input
+	- ->remove was added
+
