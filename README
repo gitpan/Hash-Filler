@@ -7,6 +7,10 @@ SYNOPSIS
 
       my $hf = new Hash::Filler;
 
+                                    # Show how a ->fill() method executes
+                                    # the rules
+      $Hash::Filler::DEBUG = 1;
+
                                     # Add a set of rules
 
       $hf->add('key1', sub { my $hr = shift; ... }, ['key2', 'key3'], $pref);

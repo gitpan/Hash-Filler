@@ -17,3 +17,11 @@ Revision history for Perl extension Hash::Filler.
 	- ->dump_r_tree changed the format of its input
 	- ->remove was added
 
+1.40  Mon Sep  4 20:00:00 2000
+	- Semantic clarification in the user-supplied sub to the rules
+	- Fixed a few semantic quirks regarding rule ordering,
+	  wildcards and preferences
+	- A prerequisite's user-supplied sub returning false will
+	  not directly cause the current rule to be skipped.
+	- Added basic tests
+

@@ -13,7 +13,7 @@ use constant EXISTS	=> 2;	# Use exists() (default)
 
 use constant INDENT	=> 2;	# How much to indent printouts
 
-$VERSION	= '1.30';
+$VERSION	= '1.40';
 $DEBUG		= '0';
 
 my $indent = 0;
@@ -49,24 +49,30 @@ sub _sort {			# This is to be used by the sort
 sub _print_rule {
     my $self = shift;
     my $rule = shift;
-    printf("%s([%d] rule %s for key %s, used %s, pref %s, %s be used)\n",  
+    my $key = shift;
+
+    printf("%s[%d] rule for key %s, used %s, pref %s, %s be used\n",  
 	   ' ' x $indent,
 	   $rule->{'id'},
-	   $rule,
 	   defined $rule->{'key'} ? $rule->{'key'} : '<ANY>',
 	   $rule->{'used'}, 
 	   $rule->{'pref'},
 	   $rule->{'use'} ? 'can' : 'cannot');
-    printf("%s[called %d times (%0.6f secs)]\n",
+    printf("%s|[called %d times (%0.6f secs)]\n",
 	   ' ' x $indent,
 	   $self->{'calls'}->[$rule->{'id'}],
 	   $self->{'times'}->[$rule->{'id'}]);
+    if (defined $key) {
+	printf("%s|[called to get key %s]\n",
+	       ' ' x $indent,
+	       $key);
+    }
     my $pre = 0;
     foreach my $pr (sort @{$rule->{'prereq'}}) {
 	printf("%s+- prereq %s\n", ' ' x $indent, $pr);
 	++$pre;
     }
-    printf("%s  ** No prereq\n", ' ' x $indent) unless $pre;
+    printf("%s+- No prereq\n", ' ' x $indent) unless $pre;
 }
 
 sub dump_r_tree {
@@ -76,7 +82,7 @@ sub dump_r_tree {
 	print "Rules for key $key:\n";
 	foreach my $rule (sort(_sort @{$self->{'rules'}->{$key}})) {
 	    ++$dumped;
-	    $self->_print_rule($rule, 2);
+	    $self->_print_rule($rule);
 	}
 	print "  No rules.\n" unless $dumped;
     }
@@ -84,7 +90,7 @@ sub dump_r_tree {
     print "Wildcard rules:\n";
     foreach my $rule (sort(_sort @{$self->{'wild'}})) {
 	++$dumped;
-	$self->_print_rule($rule, 2);
+	$self->_print_rule($rule);
     }
     print "  No rules.\n" unless $dumped;
 }
@@ -155,20 +161,10 @@ sub add {
     $ret;
 }
 
-sub fill {
+sub _exists {
     my $self = shift;
     my $href = shift;
     my $key = shift;
-
-    croak "->fill() must be given a hash reference"
-	unless ref($href) eq 'HASH';
-
-				# Provide a quick exit if the hash
-				# key is already defined or if
-				# we have no rules to generate it.
-
-    ++ $self->{'calls'}->[0];	# Keep the number of times ->fill
-				# has been called.
 
     if ($self->{'method'} == DEFINED) {
 	return 1 if defined $href->{$key};
@@ -182,6 +178,27 @@ sub fill {
     else {
 	return 1 if $href->{$key};
     }
+    return 0;
+}
+
+sub fill {
+    my $self = shift;
+    my $href = shift;
+    my $key = shift;
+    my $ret = 0;
+
+    croak "->fill() must be given a hash reference"
+	unless ref($href) eq 'HASH';
+
+				# Provide a quick exit if the hash
+				# key is already defined or if
+				# we have no rules to generate it.
+
+    ++ $self->{'calls'}->[0];	# Keep the number of times ->fill
+				# has been called.
+
+    return 1 
+	if $self->_exists($href, $key);
 
     return 0 
 	unless $self->{'rules'}->{$key} or
@@ -189,7 +206,7 @@ sub fill {
 
 				# Look through the available rules
 				# and try to find an execution plan
-				# to fill the requested $key
+				# to fill the requested $key.
 
     my @rulelist;
 
@@ -202,13 +219,14 @@ sub fill {
   RULE:    
     foreach my $rule (@rulelist) {
 
-	next RULE if $self->{'loop'} and $rule->{'used'};
+	next RULE		# Watch out for infinite loops
+	    if $self->{'loop'} and 
+		$rule->{'used'};
 
 	$rule->{'used'} ++;	# Mark this rule as being used
 				# to control infinite recursion
 
 	++ $self->{'calls'}->[$rule->{'id'}];
-	$self->_print_rule($rule) if $DEBUG;
 
 				# Insure that all prerequisites
 				# are there before attempting to
@@ -216,45 +234,64 @@ sub fill {
 
 	foreach my $pr (@{$rule->{'prereq'}}) {
 
-	    if ($self->{'method'} == DEFINED) {
-		next if defined $href->{$key};
+				# A rule cannot be invoked to resolve
+				# its own prerequisite as this might make
+				# no sense.
+
+	    if ($pr eq $key) {
+		if (defined $rule->{'key'}) {
+		    croak "Rule " 
+			. $rule->{'id'} 
+		    . " has itself as prerequisite";
+		}
+		else {		# A wildcard rule...
+		    next RULE
+			unless $self->_exists($href, $pr);
+		}
 	    }
-	    elsif ($self->{'method'} == EXISTS) {
-		next if exists $href->{$key};
-	    }
-	    elsif (ref $self->{'method'} eq 'CODE') {
-		next if $self->{'method'}->($href, $key);
-	    }
-	    else {
-		next if $href->{$key};
-	    }
+	    
+				# Recursive call. If required, attempt
+				# to fill this prerequisite using the
+				# available rules. If the prereq is 
+				# already in the hash, this will return 
+				# immediatly. The retval of this ->fill()
+				# is ignored as there might be more than
+				# one rule that can provide the missing
+				# prereq.
+
+# XXX - Note that we might want to return false from this rule if the fill
+# method for a prereq returns false. The current implementation allows the
+# method's return value control the behavior of ->fill more fine-granedly.
 
 	    $indent += INDENT;
-	    
-	    my $filled = $self->fill($href, $pr);
-
+	    $self->fill($href, $pr);
 	    $indent -= INDENT;
 
-	    next RULE 
-		unless $filled;	# A prerequisite could not be
-				# satisfied automatically so this
-				# rule cannot be applied
+				# Insure that the required hash
+				# buckets are already filled
+				# before attempting to call the 
+				# user supplied function.
+
+	    next RULE
+		unless $self->_exists($href, $pr);
 	}
 
-	my $time = [gettimeofday];
+	$self->_print_rule($rule, $key) if $DEBUG;
 
-	my $ret = $rule->{'code'}->($href, $key);
-	
+				# Run and profile the execution of
+				# the user supplied method.
+
+	my $time = [gettimeofday];
+	$ret = $rule->{'code'}->($href, $key);
 	$time = tv_interval($time);
 
 	$self->{'times'}->[$rule->{'id'}] += $time;
 	$self->{'times'}->[0] += $time;
-
-	$rule->{'used'} --;	# This rule has hopefully
-				# completed
-
-	return $ret
-	    if $ret;
+    }
+    continue {
+	$rule->{'used'} --;	# Rule is no longer used
+	return $ret		# If a user-supplied sub was
+	    if $ret;		# succesful, we're done
     }
 
     return 0;			# No rule matched or was succesful.
