@@ -39,11 +39,24 @@ $hf->add(
     sub { $_[0]->{$_[1]} = 'i:key4'; }, 
     []);
 
+$hf->add(
+    'key5', 
+    sub { 1; }, 
+    []);
+
+$hf->add(
+    'key6', 
+    sub { $_[0]->{$_[1]} = ' does ' . 
+	      ((exists $_[0]->{'key5'}) ? '' : ' not ') . ' exist'; 1; }, 
+    ['key5']);
+
+$hf->method($Hash::Filler::TRUE);
+
 $hf->_dump_r_tree;
 
 my %hash;
 
-foreach my $key (qw(key7 key2 key3))
+foreach my $key (qw(key7 key2 key3 key6 key6))
 {
     print "*** Filling of key $key:\n";
     if ($hf->fill(\%hash, $key)) {

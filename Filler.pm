@@ -4,7 +4,13 @@ use strict;
 use Carp;
 use vars qw($VERSION $DEBUG);
 
-$VERSION	= '1.00';
+# How to check for the existence of an element
+
+use constant TRUE	=> 0;	# Test if the value is true
+use constant DEFINED	=> 1;	# Use defined()
+use constant EXISTS	=> 2;	# Use exists() (default)
+
+$VERSION	= '1.10';
 $DEBUG		= '0';
 
 
@@ -17,6 +23,8 @@ sub new {
     my $self = {
 	'rules' => {},
 	'loop' => 1,		# Avoid loops by default
+	'method' => EXISTS,	# Which method to use to check for
+				# existence of a hash key
     };
 
     bless $self, $class;
@@ -61,6 +69,10 @@ sub loop {
     $_[0]->{'loop'} = $_[1];
 }
 
+sub method {
+    $_[0]->{'method'} = $_[1];
+}
+
 sub add {
     push @{$_[0]->{'rules'}->{$_[1]}}, {
 	'key' => $_[1],
@@ -84,7 +96,16 @@ sub fill {
 				# key is already defined or if
 				# we have no rules to generate it.
 
-    return 1 if exists $href->{$key};
+    if ($self->{'method'} == DEFINED) {
+	return 1 if defined $href->{$key};
+    }
+    elsif ($self->{'method'} == EXISTS) {
+	return 1 if exists $href->{$key};
+    }
+    else {
+	return 1 if $href->{$key};
+    }
+
     return 0 unless $self->{'rules'}->{$key};
 
 				# Look through the available rules
@@ -105,7 +126,17 @@ sub fill {
 				# call this method
 
 	foreach my $pr (@{$rule->{'prereq'}}) {
-	    next if exists $href->{$pr};
+
+	    if ($self->{'method'} == DEFINED) {
+		next if defined $href->{$key};
+	    }
+	    elsif ($self->{'method'} == EXISTS) {
+		next if exists $href->{$key};
+	    }
+	    else {
+		next if $href->{$key};
+	    }
+
 	    if (not $self->fill($href, $pr)) {
 		next RULE;	# A prerequisite could not be
 				# satisfied automatically so this
@@ -150,6 +181,9 @@ HashFiller - Programatically fill elements of a hash based in prerequisites
 
   $hf->loop(0);			# Don't try to avoid infinite loops
 
+				# Test if a key exists using defined()
+  $hf->method($Hash::Filler::DEFINED);
+
   my %hash;
 
   $hf->fill(\%hash, 'key1');	# Calculate the value of $hash{key1}
@@ -162,7 +196,7 @@ C<Hash::Filler> provides an interface so that hash elements can be
 calculated depending in the existence of other hash elements, using
 user-supplied code references.
 
-There are two relevant methods, described below:
+There are a few relevant methods, described below:
 
 =over 4
 
@@ -185,6 +219,38 @@ added. The module will attempt to use them both but the execution
 order will be undefined unless you use $pref. The default $pref is
 100.
 
+=item C<-E<gt>method($val)>
+
+Which method to use to decide if a given key is present in the
+hash. The accepted values are:
+
+=over 4
+
+=item C<$Hash::Filler::EXISTS> (default)
+
+    The existence of a hash element or key is calculated using a
+    construct like C<exists($hash{$key})>.
+
+=item C<$Hash::Filler::DEFINED>
+
+    The existence of a hash element or key is calculated using a
+    construct like C<defined($hash{$key})>.
+
+=item C<$Hash::Filler::TRUE>
+
+    The existence of a hash element or key is calculated using a
+    construct like C<$hash{$key}>.
+
+=back
+
+This allow this module to be customized to the particular application
+in which it is being used. Be advised that changing this might cause a
+change in which and when the rules are invoked for a particular hash
+so probably it should only be used before the first call to
+C<-E<gt>fill>.
+
+By defult, the module uses exists() to do this check.
+
 =item C<-E<gt>loop($val)>
 
 Controls if the module should try to avoid infinite loops. A true $val
@@ -196,7 +262,7 @@ Attempts to fill the bucket $key of the hash referenced by $r_hash
 using the supplied rules.
 
 This method will return a true value if there are rules that allow the
-requested $key to be calculated (or the $key C<exists> in the hash)
+requested $key to be calculated (or the $key is in the hash)
 and the user supplied code returned true.
 
 To avoid infinite loops, the code will not invoke a rule twice unless
