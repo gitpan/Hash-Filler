@@ -1,0 +1,85 @@
+NAME
+    HashFiller - Programatically fill elements of a hash based in
+    prerequisites
+
+SYNOPSIS
+      use Hash::Filler;
+
+      my $hf = new Hash::Filler;
+
+      $hf->add('key1', sub { my $hr = shift; ... }, ['key2', 'key3'], $pref);
+      $hf->add('key1', sub { my $hr = shift; ... }, [], $pref);
+      $hf->add('key2', sub { my $hr = shift; ... }, ['key1', 'key3'], $pref);
+      $hf->add('key3', sub { my $hr = shift; ... }, ['key1', 'key2'], $pref);
+
+      $hf->loop(0);                 # Don't try to avoid infinite loops
+
+      my %hash;
+
+      $hf->fill(\%hash, 'key1');    # Calculate the value of $hash{key1}
+      $hash{'key2'} = 'foo';        # Manually fill a hash position
+      $hf->fill(\%hash, 'key2');    # Calculate the value of $hash{key2}
+
+DESCRIPTION
+    `Hash::Filler' provides an interface so that hash elements can
+    be calculated depending in the existence of other hash elements,
+    using user-supplied code references.
+
+    There are two relevant methods, described below:
+
+    `->add($key, $code, $r_prereq, $pref)'
+        Adds a new rule to the `Hash::Filler' object. The rule will
+        be used to fill the hash bucket identified with key $key. To
+        fill this bucket, the code referenced by $code will be
+        invoked, passing it a reference to the hash being worked on
+        and the key that is being filled. This will only be called
+        if all of the hash buckets whose keys are in the list
+        referenced by $r_prereq `exist'.
+
+        If the user-supplied code returns a false value, failure is
+        assumed.
+
+        An optional preference can be supplied. This is used to help
+        the internal rule selection choose the better rule.
+
+        Multiple rules for the same $key and the same $r_prereq can
+        be added. The module will attempt to use them both but the
+        execution order will be undefined unless you use $pref. The
+        default $pref is 100.
+
+    `->loop($val)'
+        Controls if the module should try to avoid infinite loops. A
+        true $val means that it must try (the default). A false
+        value means otherwise.
+
+    `->fill($r_hash, $key)'
+        Attempts to fill the bucket $key of the hash referenced by
+        $r_hash using the supplied rules.
+
+        This method will return a true value if there are rules that
+        allow the requested $key to be calculated (or the $key
+        `exists' in the hash) and the user supplied code returned
+        true.
+
+        To avoid infinite loops, the code will not invoke a rule
+        twice unless `->loop' is called with a true value. The rules
+        will be used starting with the ones with less prerequisites,
+        as these are assumed to be lighter. To use a different
+        ordering, specify $pref. Higher values of $pref are used
+        first.
+
+CAVEATS
+    This code uses recursion to resolve rules. This allows it to
+    figure out the value for a given key with only an incomplete
+    rule specification. Be warned that this might be costly if used
+    with large sets of rules.
+
+AUTHOR
+    Luis E. Munoz < lem@cantv.net>
+
+SEE ALSO
+    perl(1).
+
+WARRANTY
+    Absolutely none.
+
