@@ -6,3 +6,8 @@ Revision history for Perl extension Hash::Filler.
 1.10  Fri Sep  1 15:00:11 2000
 	- Added ->method and some constants
 
+1.20  Mon Sep  4 11:45:00 2000
+	- Added statistics to the rules to ease the tuning
+	- Added documentation about what this module is for :)
+	- ->dump_r_tree is now 'public'
+	- Added user-supplied hash methods.

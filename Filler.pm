@@ -3,6 +3,7 @@ package Hash::Filler;
 use strict;
 use Carp;
 use vars qw($VERSION $DEBUG);
+use Time::HiRes qw(gettimeofday tv_interval);
 
 # How to check for the existence of an element
 
@@ -10,7 +11,7 @@ use constant TRUE	=> 0;	# Test if the value is true
 use constant DEFINED	=> 1;	# Use defined()
 use constant EXISTS	=> 2;	# Use exists() (default)
 
-$VERSION	= '1.10';
+$VERSION	= '1.20';
 $DEBUG		= '0';
 
 
@@ -21,7 +22,10 @@ sub new {
     my $class = ref($type) || $type || "Hash::Filler";
 
     my $self = {
-	'rules' => {},
+	'rules' => {},		# All the rules we know about
+	'times' => [],		# Accumulated times for each rule
+	'calls' => [],		# How many times each rule has been used
+	'id' => 0,		# Current rule id
 	'loop' => 1,		# Avoid loops by default
 	'method' => EXISTS,	# Which method to use to check for
 				# existence of a hash key
@@ -39,11 +43,16 @@ sub _sort {			# This is to be used by the sort
 }
 
 sub _print_rule {
+    my $self = shift;
     my $rule = shift;
-    printf("  (rule %s, used %s, pref %s)\n",  
+    printf("  ([%d] rule %s, used %s, pref %s)\n",  
+	   $rule->{'id'},
 	   $rule,
 	   $rule->{'used'}, 
 	   $rule->{'pref'});
+    printf("  [called %d times (%0.6f secs)]\n",
+	   $self->{'calls'}->[$rule->{'id'}],
+	   $self->{'times'}->[$rule->{'id'}]);
     my $pre = 0;
     foreach my $pr (sort @{$rule->{'prereq'}}) {
 	printf("  +- %s\n", $pr);
@@ -52,14 +61,14 @@ sub _print_rule {
     print "  ** No prereq\n" unless $pre;
 }
 
-sub _dump_r_tree {
+sub dump_r_tree {
     my $self = shift;
     foreach my $key (keys %{$self->{'rules'}}) {
 	my $dumped = 0;
 	print "Rules for key $key:\n";
 	foreach my $rule (sort _sort @{$self->{'rules'}->{$key}}) {
 	    ++$dumped;
-	    _print_rule $rule;
+	    $self->_print_rule($rule);
 	}
 	print "  No rules.\n" unless $dumped;
     }
@@ -73,15 +82,25 @@ sub method {
     $_[0]->{'method'} = $_[1];
 }
 
+sub stats {
+    @{$_[0]->{'calls'}};
+}
+
+sub profile {
+    @{$_[0]->{'times'}};
+}
+
 sub add {
+    my $ret;
     push @{$_[0]->{'rules'}->{$_[1]}}, {
 	'key' => $_[1],
 	'code' => $_[2],
 	'prereq' => $_[3],
 	'pref' => $_[4] ? $_[4] : 100,
 	'used' => 0,
+	'id' => $ret = ++ $_[0]->{'id'},
     };
-    1;
+    $ret;
 }
 
 sub fill {
@@ -96,11 +115,17 @@ sub fill {
 				# key is already defined or if
 				# we have no rules to generate it.
 
+    ++ $self->{'calls'}->[0];	# Keep the number of times ->fill
+				# has been called.
+
     if ($self->{'method'} == DEFINED) {
 	return 1 if defined $href->{$key};
     }
     elsif ($self->{'method'} == EXISTS) {
 	return 1 if exists $href->{$key};
+    }
+    elsif (ref $self->{'method'} eq 'CODE') {
+	return 1 if $self->{'method'}->($href, $key);
     }
     else {
 	return 1 if $href->{$key};
@@ -133,6 +158,9 @@ sub fill {
 	    elsif ($self->{'method'} == EXISTS) {
 		next if exists $href->{$key};
 	    }
+	    elsif (ref $self->{'method'} eq 'CODE') {
+		next if $self->{'method'}->($href, $key);
+	    }
 	    else {
 		next if $href->{$key};
 	    }
@@ -144,9 +172,17 @@ sub fill {
 	    }
 	}
 
-	_print_rule $rule if $DEBUG;
+	$self->_print_rule($rule) if $DEBUG;
 	
+	++ $self->{'calls'}->[$rule->{'id'}];
+	my $time = [gettimeofday];
+
 	my $ret = $rule->{'code'}->($href, $key);
+	
+	$time = tv_interval($time);
+
+	$self->{'times'}->[$rule->{'id'}] += $time;
+	$self->{'times'}->[0] += $time;
 
 	$rule->{'used'} --;	# This rule has hopefully
 				# completed
@@ -189,12 +225,33 @@ HashFiller - Programatically fill elements of a hash based in prerequisites
   $hf->fill(\%hash, 'key1');	# Calculate the value of $hash{key1}
   $hash{'key2'} = 'foo';	# Manually fill a hash position
   $hf->fill(\%hash, 'key2');	# Calculate the value of $hash{key2}
+  $hr->dump_r_tree();		# Print the key tree
+
+  my @stats = $hf->stats();	# Obtain statistics about rule invocation
+  my @prof = $hf->profile();	# Obtain profiling information about the rules
 
 =head1 DESCRIPTION
 
 C<Hash::Filler> provides an interface so that hash elements can be
 calculated depending in the existence of other hash elements, using
 user-supplied code references.
+
+One of the first uses of this module was inside a server. In this
+server, the responses to commands came from external sources. For each
+request, the server needed to contact a number of external sources to
+calculate the proper answer. These calculations sometimes attempted
+redundant external accesses, thus increased the response time and
+load.
+
+To help in this situation, the calculations were rewritten to access a
+hash instead of the external sources directly and this module was used
+to fill the hash depending on the requirements of the
+calculations. The external accesses were also improved so that more
+than one choice or rule existed for each datum, depending on wether
+prerequisites existed already in the hash or not.
+
+Hopefully this explanation will make it easier to understand what this
+module is about :)
 
 There are a few relevant methods, described below:
 
@@ -219,6 +276,43 @@ added. The module will attempt to use them both but the execution
 order will be undefined unless you use $pref. The default $pref is
 100.
 
+This function returns a 'rule identifier'. This identifier is the
+index that designates a given rule. Generally, it is only used in
+conjunction with profiling.
+
+=item C<-E<gt>dump_r_tree>
+
+This method prints out a representation of the rule tree kept by the
+object. The tree lists the rules in the order they would be preferred
+for a given key.
+
+Output is sent to STDOUT.
+
+=item C<-E<gt>profile>
+
+Returns an array containing time profiles for the execution of each
+rule. The index in the array is the identifier assigned for each
+rule. Each slot in the array contain the accumulated time for all the
+invocations of that particular rule.
+
+Slot 0 in the array contains the accumulated time for ALL the invoked
+rules. This make it easier to find the most important contributors to
+the accumulated time.
+
+Note that time is only computed if the user-supplied method must be
+called. Whenever the hash bucket to be filled by a rule already has a
+value, this method will not be called and no time will be added to
+this rule.
+
+=item C<-E<gt>stats>
+
+This method returns an array which counts the number of times a given
+rule has been invoked and its user-supplied method has been
+called. The index into the array is the rule identifier, just as in
+the case of C<-E<gt>profile>. The 0th element of the array contains
+the total number of times that C<-E<gt>fill> has been called. This is
+useful to deduce how many times the rules needed to be invoked.
+
 =item C<-E<gt>method($val)>
 
 Which method to use to decide if a given key is present in the
@@ -240,6 +334,15 @@ hash. The accepted values are:
 
     The existence of a hash element or key is calculated using a
     construct like C<$hash{$key}>.
+
+=item Reference to a sub
+
+    This allows the user to specify a function to determine wether a
+    hash bucket must be calculated or not. The function is invoked by
+    passing it a reference to the hash and the key that must be
+    checked. The function must return a TRUE value is the bucket is
+    already populated or false if the corresponding rules must be
+    applied.
 
 =back
 

@@ -6,7 +6,7 @@ $Hash::Filler::DEBUG = 1;
 
 $hf->add(
 	 'key0', 
-	 sub { $_[0]->{$_[1]} = 'i:key0'; },
+	 sub { $_[0]->{$_[1]} = 'i:key0'; sleep 1;},
     []);
 
 $hf->add(
@@ -16,7 +16,7 @@ $hf->add(
 
 $hf->add(
     'key1', 
-    sub { $_[0]->{$_[1]} = 'k1(' . $_[0]->{'key0'} . ')'; }, 
+    sub { $_[0]->{$_[1]} = 'k1(' . $_[0]->{'key0'} . ')'; sleep 1;}, 
     ['key0']);
 
 $hf->add(
@@ -31,7 +31,7 @@ $hf->add(
 
 $hf->add(
     'key4', 
-    sub { $_[0]->{$_[1]} = 'k4(' . $_[0]->{'key3'} . ')'; }, 
+    sub { $_[0]->{$_[1]} = 'k4(' . $_[0]->{'key3'} . ')'; sleep 1;}, 
     ['key3'], 1000);
 
 $hf->add(
@@ -52,7 +52,7 @@ $hf->add(
 
 $hf->method($Hash::Filler::TRUE);
 
-$hf->_dump_r_tree;
+$hf->dump_r_tree;
 
 my %hash;
 
@@ -67,3 +67,5 @@ foreach my $key (qw(key7 key2 key3 key6 key6))
     }
     print "*** Value of $key is ", $hash{$key}, "\n";
 }
+
+$hf->dump_r_tree;
